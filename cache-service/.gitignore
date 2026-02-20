@@ -1,0 +1,41 @@
+# ── Maven ─────────────────────────────────────────────────────────────────────
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+# ── Credentials / Secrets ─────────────────────────────────────────────────────
+.env
+*.env
+*.pem
+*.key
+*.crt
+*.p12
+*.jks
+*.keystore
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.idea/
+*.iml
+*.iws
+*.ipr
+.classpath
+.project
+.settings/
+.factorypath
+*.sts4-cache
+.vscode/
+*.swp
+*.swo
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+logs/
+*.log
+*.log.*
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+docker-compose.override.yml

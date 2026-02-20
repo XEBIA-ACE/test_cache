@@ -1,0 +1,30 @@
+##############################################################################
+# Cache Service – Development Profile
+##############################################################################
+
+spring:
+  redis:
+    mode: standalone
+    host: localhost
+    port: 6379
+    password:
+    database: 0
+    lettuce:
+      pool:
+        max-active: 8
+        max-idle: 4
+        min-idle: 1
+
+server:
+  port: 8080
+
+management:
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    com.example.cacheservice: DEBUG
+    org.springframework.data.redis: DEBUG
+    io.lettuce: DEBUG

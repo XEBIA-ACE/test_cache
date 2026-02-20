@@ -1,0 +1,48 @@
+##############################################################################
+# Cache Service – Production Profile
+#
+# Redis Cluster is used for horizontal scaling and fault tolerance.
+# All values MUST be supplied via environment variables / secret manager.
+# Never commit secrets to version control.
+##############################################################################
+
+spring:
+  redis:
+    mode: ${REDIS_MODE:cluster}
+    password: ${REDIS_PASSWORD}
+    cluster:
+      nodes: ${REDIS_CLUSTER_NODES}
+      max-redirects: 3
+      password: ${REDIS_CLUSTER_PASSWORD:${REDIS_PASSWORD}}
+    lettuce:
+      pool:
+        max-active: 32
+        max-idle: 16
+        min-idle: 4
+        max-wait: 3000
+    redisson:
+      connection-pool-size: 20
+      connection-minimum-idle-size: 4
+      timeout: 2000
+      retry-attempts: 2
+      retry-interval: 1000
+
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+
+management:
+  endpoint:
+    health:
+      show-details: never   # Never leak internal details in prod health endpoint
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus  # Restrict to safe endpoints
+
+logging:
+  level:
+    com.example.cacheservice: INFO
+    org.springframework.data.redis: WARN
+    io.lettuce: WARN
+    org.redisson: WARN

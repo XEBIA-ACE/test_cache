@@ -1,0 +1,106 @@
+##############################################################################
+# Cache Service – Base Configuration
+#
+# All sensitive values should be provided via environment variables.
+# Profile-specific overrides live in application-{dev,staging,prod}.yml.
+# Environment variable mapping: e.g. SPRING_REDIS_HOST → spring.redis.host
+##############################################################################
+
+spring:
+  application:
+    name: cache-service
+
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+
+  # ── Redis / Lettuce ────────────────────────────────────────────────────────
+  redis:
+    # Mode: standalone | sentinel | cluster
+    mode: ${REDIS_MODE:standalone}
+
+    # Standalone settings (used when mode = standalone)
+    host: ${REDIS_HOST:localhost}
+    port: ${REDIS_PORT:6379}
+    password: ${REDIS_PASSWORD:}
+    database: ${REDIS_DATABASE:0}
+    command-timeout: ${REDIS_COMMAND_TIMEOUT_MS:5000}
+
+    # Sentinel settings (used when mode = sentinel)
+    sentinel:
+      master: ${REDIS_SENTINEL_MASTER:mymaster}
+      nodes: ${REDIS_SENTINEL_NODES:localhost:26379}
+      password: ${REDIS_SENTINEL_PASSWORD:}
+
+    # Cluster settings (used when mode = cluster)
+    cluster:
+      nodes: ${REDIS_CLUSTER_NODES:localhost:7000,localhost:7001,localhost:7002}
+      max-redirects: ${REDIS_CLUSTER_MAX_REDIRECTS:3}
+      password: ${REDIS_CLUSTER_PASSWORD:}
+
+    # Lettuce connection pool (commons-pool2)
+    lettuce:
+      pool:
+        max-active: ${REDIS_POOL_MAX_ACTIVE:16}
+        max-idle: ${REDIS_POOL_MAX_IDLE:8}
+        min-idle: ${REDIS_POOL_MIN_IDLE:2}
+        max-wait: ${REDIS_POOL_MAX_WAIT_MS:-1}
+
+    # Redisson-specific tuning
+    redisson:
+      connection-minimum-idle-size: ${REDISSON_POOL_MIN_IDLE:2}
+      connection-pool-size: ${REDISSON_POOL_SIZE:10}
+      idle-connection-timeout: ${REDISSON_IDLE_TIMEOUT_MS:10000}
+      connect-timeout: ${REDISSON_CONNECT_TIMEOUT_MS:10000}
+      timeout: ${REDISSON_TIMEOUT_MS:3000}
+      retry-attempts: ${REDISSON_RETRY_ATTEMPTS:3}
+      retry-interval: ${REDISSON_RETRY_INTERVAL_MS:1500}
+
+  # ── Jackson ────────────────────────────────────────────────────────────────
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+    deserialization:
+      fail-on-unknown-properties: false
+
+# ── Server ───────────────────────────────────────────────────────────────────
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+  compression:
+    enabled: true
+    mime-types: application/json
+
+# ── Actuator ─────────────────────────────────────────────────────────────────
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus,loggers
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: always
+      show-components: always
+  metrics:
+    tags:
+      application: ${spring.application.name}
+      environment: ${spring.profiles.active}
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+
+# ── OpenAPI / Swagger ────────────────────────────────────────────────────────
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: alpha
+    tags-sorter: alpha
+  api-docs:
+    path: /v3/api-docs
+  show-actuator: false
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+logging:
+  config: classpath:logback-spring.xml

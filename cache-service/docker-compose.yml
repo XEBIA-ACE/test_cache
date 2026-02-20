@@ -1,0 +1,196 @@
+##############################################################################
+# docker-compose.yml – Local Development Environment
+#
+# Profiles available:
+#   (default)  – standalone Redis + the cache-service app
+#   sentinel   – Redis Sentinel HA setup (1 master, 2 replicas, 3 sentinels)
+#   cluster    – Redis Cluster (3 primary + 3 replica nodes)
+#
+# Usage:
+#   Standalone:  docker compose up
+#   Sentinel:    docker compose --profile sentinel up
+#   Cluster:     docker compose --profile cluster up
+##############################################################################
+
+version: "3.9"
+
+# ─── Shared configuration ─────────────────────────────────────────────────────
+x-redis-base: &redis-base
+  image: redis:7-alpine
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD", "redis-cli", "ping"]
+    interval: 5s
+    timeout: 3s
+    retries: 5
+
+# ─── Networks ─────────────────────────────────────────────────────────────────
+networks:
+  cache-net:
+    driver: bridge
+
+# ─── Volumes ──────────────────────────────────────────────────────────────────
+volumes:
+  redis-data:
+  redis-master-data:
+  redis-replica1-data:
+  redis-replica2-data:
+
+# ─── Services ─────────────────────────────────────────────────────────────────
+services:
+
+  # ── Standalone Redis (default profile) ──────────────────────────────────────
+  redis:
+    <<: *redis-base
+    container_name: cache-service-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    command: >
+      redis-server
+      --save 60 1
+      --loglevel notice
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    networks:
+      - cache-net
+
+  # ── Cache Service Application ────────────────────────────────────────────────
+  cache-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cache-service-app
+    ports:
+      - "${SERVER_PORT:-8080}:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      REDIS_MODE: standalone
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - cache-net
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # ── Redis Master (Sentinel profile) ──────────────────────────────────────────
+  redis-master:
+    <<: *redis-base
+    profiles: [sentinel]
+    container_name: cache-redis-master
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis-master-data:/data
+    networks:
+      - cache-net
+
+  redis-replica-1:
+    <<: *redis-base
+    profiles: [sentinel]
+    container_name: cache-redis-replica-1
+    ports:
+      - "6381:6379"
+    volumes:
+      - redis-replica1-data:/data
+    command: redis-server --replicaof redis-master 6379
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    networks:
+      - cache-net
+
+  redis-replica-2:
+    <<: *redis-base
+    profiles: [sentinel]
+    container_name: cache-redis-replica-2
+    ports:
+      - "6382:6379"
+    volumes:
+      - redis-replica2-data:/data
+    command: redis-server --replicaof redis-master 6379
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    networks:
+      - cache-net
+
+  redis-sentinel-1:
+    image: redis:7-alpine
+    profiles: [sentinel]
+    container_name: cache-sentinel-1
+    ports:
+      - "26379:26379"
+    command: >
+      redis-sentinel /etc/sentinel.conf
+    volumes:
+      - ./docker/sentinel.conf:/etc/sentinel.conf
+    depends_on:
+      - redis-master
+      - redis-replica-1
+      - redis-replica-2
+    networks:
+      - cache-net
+
+  redis-sentinel-2:
+    image: redis:7-alpine
+    profiles: [sentinel]
+    container_name: cache-sentinel-2
+    ports:
+      - "26380:26379"
+    command: redis-sentinel /etc/sentinel.conf
+    volumes:
+      - ./docker/sentinel.conf:/etc/sentinel.conf
+    depends_on:
+      - redis-master
+    networks:
+      - cache-net
+
+  redis-sentinel-3:
+    image: redis:7-alpine
+    profiles: [sentinel]
+    container_name: cache-sentinel-3
+    ports:
+      - "26381:26379"
+    command: redis-sentinel /etc/sentinel.conf
+    volumes:
+      - ./docker/sentinel.conf:/etc/sentinel.conf
+    depends_on:
+      - redis-master
+    networks:
+      - cache-net
+
+  # ── Cache Service (Sentinel profile) ────────────────────────────────────────
+  cache-service-sentinel:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: [sentinel]
+    container_name: cache-service-app-sentinel
+    ports:
+      - "8081:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: staging
+      REDIS_MODE: sentinel
+      REDIS_SENTINEL_MASTER: mymaster
+      REDIS_SENTINEL_NODES: redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    depends_on:
+      - redis-sentinel-1
+      - redis-sentinel-2
+      - redis-sentinel-3
+    networks:
+      - cache-net
+    restart: unless-stopped

@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <springProfile name="dev">
+        <!-- Human-readable console output for local development -->
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern>
+            </encoder>
+        </appender>
+
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+        <logger name="com.example.cacheservice" level="DEBUG"/>
+    </springProfile>
+
+    <springProfile name="staging,prod">
+        <!-- Structured JSON output for log aggregation (ELK/Splunk/CloudWatch) -->
+        <appender name="JSON_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+                <!--
+                  In production, replace this pattern encoder with a JSON encoder
+                  (e.g. logstash-logback-encoder) for proper structured logging:
+
+                  <dependency>
+                    <groupId>net.logstash.logback</groupId>
+                    <artifactId>logstash-logback-encoder</artifactId>
+                    <version>7.4</version>
+                  </dependency>
+
+                  Then use:
+                  <encoder class="net.logstash.logback.encoder.LogstashEncoder"/>
+                -->
+                <pattern>{"timestamp":"%d{yyyy-MM-dd'T'HH:mm:ss.SSSZ}","level":"%-5level","thread":"%thread","logger":"%logger{50}","message":"%msg","application":"cache-service"}%n</pattern>
+            </encoder>
+        </appender>
+
+        <!-- Rolling file appender for persistent log retention -->
+        <appender name="ROLLING_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+            <file>logs/cache-service.log</file>
+            <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+                <fileNamePattern>logs/cache-service.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+                <timeBasedFileNamingAndTriggeringPolicy
+                        class="ch.qos.logback.core.rolling.SizeAndTimeBasedFNATP">
+                    <maxFileSize>100MB</maxFileSize>
+                </timeBasedFileNamingAndTriggeringPolicy>
+                <maxHistory>30</maxHistory>
+                <totalSizeCap>3GB</totalSizeCap>
+            </rollingPolicy>
+            <encoder>
+                <pattern>{"timestamp":"%d{yyyy-MM-dd'T'HH:mm:ss.SSSZ}","level":"%-5level","thread":"%thread","logger":"%logger{50}","message":"%msg"}%n</pattern>
+            </encoder>
+        </appender>
+
+        <root level="INFO">
+            <appender-ref ref="JSON_CONSOLE"/>
+            <appender-ref ref="ROLLING_FILE"/>
+        </root>
+
+        <!-- Suppress noisy framework loggers in production -->
+        <logger name="org.springframework" level="WARN"/>
+        <logger name="io.lettuce" level="WARN"/>
+        <logger name="org.redisson" level="WARN"/>
+    </springProfile>
+</configuration>
