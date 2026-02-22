@@ -1,65 +1,90 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
-    <springProfile name="dev">
-        <!-- Human-readable console output for local development -->
-        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
-            <encoder>
-                <pattern>%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern>
-            </encoder>
-        </appender>
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
 
+    <springProperty scope="context" name="APP_NAME" source="spring.application.name" defaultValue="cache-service"/>
+    <springProperty scope="context" name="LOG_FORMAT" source="LOG_FORMAT" defaultValue="text"/>
+
+    <!-- ============================================================ -->
+    <!-- Appenders                                                      -->
+    <!-- ============================================================ -->
+
+    <!-- Console appender - plain text for development -->
+    <appender name="CONSOLE_TEXT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Console appender - JSON for production (log aggregation) -->
+    <appender name="CONSOLE_JSON" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <includeContext>true</includeContext>
+            <includeMdc>true</includeMdc>
+            <customFields>{"app":"${APP_NAME}"}</customFields>
+            <fieldNames>
+                <timestamp>timestamp</timestamp>
+                <message>message</message>
+                <logger>logger</logger>
+                <thread>thread</thread>
+                <level>level</level>
+            </fieldNames>
+        </encoder>
+    </appender>
+
+    <!-- Rolling file appender -->
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/${APP_NAME}.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>logs/${APP_NAME}.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <timeBasedFileNamingAndTriggeringPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedFNATP">
+                <maxFileSize>100MB</maxFileSize>
+            </timeBasedFileNamingAndTriggeringPolicy>
+            <maxHistory>30</maxHistory>
+            <totalSizeCap>3GB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Async wrapper for file appender -->
+    <appender name="ASYNC_FILE" class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="FILE"/>
+        <queueSize>512</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <includeCallerData>false</includeCallerData>
+    </appender>
+
+    <!-- ============================================================ -->
+    <!-- Profile-based configuration                                    -->
+    <!-- ============================================================ -->
+
+    <!-- Development: plain text console -->
+    <springProfile name="standalone">
         <root level="INFO">
-            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="CONSOLE_TEXT"/>
         </root>
         <logger name="com.example.cacheservice" level="DEBUG"/>
-    </springProfile>
-
-    <springProfile name="staging,prod">
-        <!-- Structured JSON output for log aggregation (ELK/Splunk/CloudWatch) -->
-        <appender name="JSON_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
-            <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
-                <!--
-                  In production, replace this pattern encoder with a JSON encoder
-                  (e.g. logstash-logback-encoder) for proper structured logging:
-
-                  <dependency>
-                    <groupId>net.logstash.logback</groupId>
-                    <artifactId>logstash-logback-encoder</artifactId>
-                    <version>7.4</version>
-                  </dependency>
-
-                  Then use:
-                  <encoder class="net.logstash.logback.encoder.LogstashEncoder"/>
-                -->
-                <pattern>{"timestamp":"%d{yyyy-MM-dd'T'HH:mm:ss.SSSZ}","level":"%-5level","thread":"%thread","logger":"%logger{50}","message":"%msg","application":"cache-service"}%n</pattern>
-            </encoder>
-        </appender>
-
-        <!-- Rolling file appender for persistent log retention -->
-        <appender name="ROLLING_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-            <file>logs/cache-service.log</file>
-            <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-                <fileNamePattern>logs/cache-service.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
-                <timeBasedFileNamingAndTriggeringPolicy
-                        class="ch.qos.logback.core.rolling.SizeAndTimeBasedFNATP">
-                    <maxFileSize>100MB</maxFileSize>
-                </timeBasedFileNamingAndTriggeringPolicy>
-                <maxHistory>30</maxHistory>
-                <totalSizeCap>3GB</totalSizeCap>
-            </rollingPolicy>
-            <encoder>
-                <pattern>{"timestamp":"%d{yyyy-MM-dd'T'HH:mm:ss.SSSZ}","level":"%-5level","thread":"%thread","logger":"%logger{50}","message":"%msg"}%n</pattern>
-            </encoder>
-        </appender>
-
-        <root level="INFO">
-            <appender-ref ref="JSON_CONSOLE"/>
-            <appender-ref ref="ROLLING_FILE"/>
-        </root>
-
-        <!-- Suppress noisy framework loggers in production -->
-        <logger name="org.springframework" level="WARN"/>
         <logger name="io.lettuce" level="WARN"/>
         <logger name="org.redisson" level="WARN"/>
+    </springProfile>
+
+    <!-- Sentinel/Cluster: JSON console + file -->
+    <springProfile name="sentinel,cluster">
+        <root level="INFO">
+            <appender-ref ref="CONSOLE_JSON"/>
+            <appender-ref ref="ASYNC_FILE"/>
+        </root>
+        <logger name="com.example.cacheservice" level="INFO"/>
+        <logger name="io.lettuce" level="WARN"/>
+        <logger name="org.redisson" level="WARN"/>
+    </springProfile>
+
+    <!-- Default fallback (no profile) -->
+    <springProfile name="default,!standalone,!sentinel,!cluster">
+        <root level="INFO">
+            <appender-ref ref="CONSOLE_TEXT"/>
+        </root>
     </springProfile>
 </configuration>

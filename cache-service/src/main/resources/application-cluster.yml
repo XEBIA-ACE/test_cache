@@ -1,0 +1,13 @@
+# ================================================================
+# Redis Cluster Mode
+# Horizontal scaling with automatic sharding across nodes.
+# Requires: minimum 3 master nodes (6 nodes recommended: 3 masters + 3 replicas)
+# Note: Some commands (KEYS, SELECT) are not supported in cluster mode.
+# ================================================================
+cache:
+  redis:
+    mode: cluster
+    cluster:
+      # Comma-separated cluster node addresses: host:port
+      nodes: ${REDIS_CLUSTER_NODES:localhost:7000,localhost:7001,localhost:7002,localhost:7003,localhost:7004,localhost:7005}
+      max-redirects: ${REDIS_CLUSTER_MAX_REDIRECTS:3}

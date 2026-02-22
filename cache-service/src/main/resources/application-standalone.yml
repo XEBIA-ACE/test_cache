@@ -1,0 +1,9 @@
+# ================================================================
+# Standalone Redis Mode
+# Single Redis instance - suitable for development and simple deployments
+# ================================================================
+cache:
+  redis:
+    mode: standalone
+    host: ${REDIS_HOST:localhost}
+    port: ${REDIS_PORT:6379}

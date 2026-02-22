@@ -2,26 +2,28 @@ package com.example.cacheservice;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.cache.annotation.EnableCaching;
+import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 
 /**
- * Entry point for the Cache Service.
+ * Cache Service Application entry point.
  *
- * <p>Supports three Redis deployment modes controlled by the {@code spring.redis.mode} property:
+ * <p>Provides a RESTful API for Redis cache operations supporting three deployment modes:
  * <ul>
- *   <li><b>standalone</b> – single Redis node (default, great for dev/test)</li>
- *   <li><b>sentinel</b>   – Redis Sentinel for automatic failover (HA)</li>
- *   <li><b>cluster</b>    – Redis Cluster for horizontal sharding</li>
+ *   <li><b>standalone</b> - Single Redis instance (development/simple deployments)</li>
+ *   <li><b>sentinel</b>   - Redis Sentinel for high-availability with automatic failover</li>
+ *   <li><b>cluster</b>    - Redis Cluster for horizontal scaling and data sharding</li>
  * </ul>
  *
- * <p>Two Redis client libraries are wired:
+ * <p>Uses two Redis clients:
  * <ul>
- *   <li><b>Lettuce</b>   – primary client via Spring Data Redis for all cache CRUD operations</li>
- *   <li><b>Redisson</b>  – secondary client for distributed locks and advanced data structures</li>
+ *   <li><b>Lettuce</b>   - Primary client via Spring Data Redis for cache CRUD operations</li>
+ *   <li><b>Redisson</b>  - Secondary client for distributed primitives (locks, rate limiters)</li>
  * </ul>
+ *
+ * <p>Start with: {@code SPRING_PROFILES_ACTIVE=standalone mvn spring-boot:run}
  */
 @SpringBootApplication
-@EnableCaching
+@ConfigurationPropertiesScan("com.example.cacheservice.infrastructure.config")
 public class CacheServiceApplication {
 
     public static void main(String[] args) {

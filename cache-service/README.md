@@ -1,221 +1,456 @@
 # Cache Service
 
-A production-ready caching microservice built on **Spring Boot 3**, **Redis**, **Lettuce**, and **Redisson**.
+A production-ready RESTful cache service built on Redis, using **Lettuce** for high-throughput CRUD operations and **Redisson** for distributed primitives (locks, rate limiters).
 
-## Architecture Overview
+## Table of Contents
+
+- [Architecture](#architecture)
+- [Technology Stack](#technology-stack)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+  - [Redis Modes](#redis-modes)
+- [API Reference](#api-reference)
+- [Docker](#docker)
+- [Testing](#testing)
+- [Observability](#observability)
+
+---
+
+## Architecture
+
+The service follows **Clean Architecture** with three layers:
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Cache Service                            │
-│                                                                 │
-│  ┌──────────────┐   ┌──────────────┐   ┌──────────────────┐   │
-│  │  REST API    │   │  Service     │   │  Redis Clients   │   │
-│  │  Controllers │──▶│  Layer       │──▶│                  │   │
-│  │              │   │              │   │  ┌─────────────┐ │   │
-│  │ /api/v1/cache│   │ CacheService │   │  │  Lettuce    │ │   │
-│  │ /api/v1/locks│   │ LockService  │   │  │  (CRUD/Bulk)│ │   │
-│  └──────────────┘   └──────────────┘   │  └─────────────┘ │   │
-│                                        │  ┌─────────────┐ │   │
-│  ┌──────────────┐                      │  │  Redisson   │ │   │
-│  │  Actuator    │                      │  │  (Locks)    │ │   │
-│  │  /health     │                      │  └─────────────┘ │   │
-│  │  /metrics    │                      └──────────────────┘   │
-│  │  /prometheus │                                              │
-│  └──────────────┘                                              │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-              ┌───────────────┼───────────────┐
-              ▼               ▼               ▼
-     ┌──────────────┐ ┌─────────────┐ ┌────────────────┐
-     │  Standalone  │ │  Sentinel   │ │    Cluster     │
-     │  Redis Node  │ │  (HA mode)  │ │  (Sharded mode)│
-     └──────────────┘ └─────────────┘ └────────────────┘
+┌────────────────────────────────────────────────┐
+│  API Layer          (api/)                      │
+│  Controllers · DTOs · Exception Handling        │
+├────────────────────────────────────────────────┤
+│  Business Layer     (business/)                 │
+│  Services · Domain Models · Business Rules      │
+├────────────────────────────────────────────────┤
+│  Infrastructure     (infrastructure/)           │
+│  Redis Config · Repository Impl · Health        │
+└────────────────────────────────────────────────┘
+         │ Lettuce              │ Redisson
+    ┌────┴────┐           ┌─────┴──────┐
+    │  Redis  │           │   Redis    │
+    │  CRUD   │           │   Locks   │
+    └─────────┘           └────────────┘
 ```
 
-### Redis Client Responsibilities
+**Why two Redis clients?**
 
-| Client | Purpose | Operations |
-|--------|---------|------------|
-| **Lettuce** (via Spring Data Redis) | Primary cache CRUD | GET, SET, DEL, SCAN, MGET, MSET, INCR, Hash commands |
-| **Redisson** | Distributed primitives | Distributed locks (RLock), force-unlock |
+| Client | Purpose | Strengths |
+|--------|---------|-----------|
+| **Lettuce** | Cache CRUD (get/set/delete/scan) | Async, non-blocking, connection pooling, cluster-native |
+| **Redisson** | Distributed locks, pub/sub | High-level abstractions, reentrant locks, Lua-atomic ops |
 
-### Supported Redis Topologies
+---
 
-| Mode | Config value | Use case |
-|------|-------------|----------|
-| Standalone | `standalone` | Dev/test; single Redis node |
-| Sentinel | `sentinel` | Production HA; auto-failover |
-| Cluster | `cluster` | Production scale-out; horizontal sharding |
+## Technology Stack
 
-Set the mode via `REDIS_MODE` environment variable.
+| Component | Technology |
+|-----------|-----------|
+| Language | Java 17 |
+| Framework | Spring Boot 3.2 |
+| Primary Redis Client | Lettuce 6 (via Spring Data Redis) |
+| Distributed Ops Client | Redisson 3.27 |
+| API Documentation | SpringDoc OpenAPI 3 / Swagger UI |
+| Metrics | Micrometer + Prometheus |
+| Build | Maven 3.9 |
+| Containerization | Docker (multi-stage, layered JAR) |
+| Integration Testing | Testcontainers |
 
 ---
 
 ## Quick Start
 
 ### Prerequisites
-
 - Java 17+
-- Docker & Docker Compose
-- Maven 3.8+ (or use the Maven Wrapper)
+- Maven 3.9+
+- Docker (for Redis and integration tests)
 
-### 1. Clone and configure
+### Option 1: Run with Docker Compose (recommended)
 
 ```bash
+# Clone and start everything (app + Redis)
 git clone <repo-url>
 cd cache-service
+
+# Start Redis standalone
+docker compose up -d redis
+
+# Run the application locally
 cp .env.example .env
-# Edit .env if needed (defaults work for local dev)
+SPRING_PROFILES_ACTIVE=standalone mvn spring-boot:run
 ```
 
-### 2. Start with Docker Compose (Standalone Redis)
+### Option 2: Full Docker Compose stack
 
 ```bash
-docker compose up
+docker compose up -d
+# App: http://localhost:8080
+# Actuator: http://localhost:8081
+# Swagger UI: http://localhost:8080/swagger-ui.html
 ```
 
-This starts:
-- Redis 7 on `localhost:6379`
-- Cache Service on `localhost:8080`
-
-### 3. Start with Redis Sentinel (HA)
+### Option 3: Run with Redis Sentinel (HA)
 
 ```bash
-docker compose --profile sentinel up
-```
-
-This starts 1 Redis master, 2 replicas, 3 Sentinel nodes, and the service on port `8081`.
-
-### 4. Build the JAR manually
-
-```bash
-./mvnw clean package -DskipTests
-java -jar target/cache-service-1.0.0.jar
-```
-
----
-
-## API Reference
-
-Swagger UI: [http://localhost:8080/swagger-ui.html](http://localhost:8080/swagger-ui.html)
-OpenAPI spec: [http://localhost:8080/v3/api-docs](http://localhost:8080/v3/api-docs)
-
-### Cache Operations (`/api/v1/cache`)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/{key}` | Get a cached value |
-| `PUT` | `/{key}` | Set a value (with optional TTL) |
-| `PUT` | `/{key}/nx` | Set only if key does not exist (SET NX EX) |
-| `DELETE` | `/{key}` | Delete a key |
-| `GET` | `/{key}/exists` | Check if a key exists |
-| `GET` | `/{key}/ttl` | Get remaining TTL in seconds |
-| `PATCH` | `/{key}/ttl?seconds=N` | Update TTL of an existing key |
-| `DELETE` | `/{key}/ttl` | Remove expiry (make key persistent) |
-| `GET` | `/scan?pattern=user:*&limit=100` | Scan keys by glob pattern (SCAN, not KEYS) |
-| `DELETE` | `/scan?pattern=user:*` | Delete all keys matching pattern |
-| `POST` | `/bulk/get` | Bulk fetch multiple keys (MGET) |
-| `POST` | `/bulk/set` | Bulk write multiple keys (MSET / pipeline) |
-| `GET` | `/{key}/hash` | Get all hash fields (HGETALL) |
-| `GET` | `/{key}/hash/{field}` | Get a single hash field (HGET) |
-| `PUT` | `/{key}/hash/{field}` | Set a hash field (HSET) |
-| `DELETE` | `/{key}/hash/{field}` | Delete a hash field (HDEL) |
-| `POST` | `/{key}/increment` | Increment counter (INCR) |
-| `POST` | `/{key}/increment/{delta}` | Increment counter by delta (INCRBY) |
-| `POST` | `/{key}/decrement` | Decrement counter (DECR) |
-| `GET` | `/info` | Get Redis server info |
-
-### Distributed Locks (`/api/v1/locks`)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/{lockName}` | Acquire a distributed lock |
-| `DELETE` | `/{lockName}` | Release a distributed lock |
-| `GET` | `/{lockName}` | Check lock status |
-| `DELETE` | `/{lockName}/force` | Force-release (admin) |
-
-### Example Requests
-
-**Set a key with TTL:**
-```bash
-curl -X PUT http://localhost:8080/api/v1/cache/user:42 \
-  -H 'Content-Type: application/json' \
-  -d '{"value": "Alice", "ttl_seconds": 3600}'
-```
-
-**Get a key:**
-```bash
-curl http://localhost:8080/api/v1/cache/user:42
-```
-
-**Bulk set:**
-```bash
-curl -X POST http://localhost:8080/api/v1/cache/bulk/set \
-  -H 'Content-Type: application/json' \
-  -d '{"entries": {"k1":"v1","k2":"v2"}, "ttl_seconds": 600}'
-```
-
-**Acquire a distributed lock:**
-```bash
-curl -X POST http://localhost:8080/api/v1/locks/order-processing \
-  -H 'Content-Type: application/json' \
-  -d '{"wait_time_ms": 0, "lease_time_ms": 30000}'
+docker compose -f docker-compose-sentinel.yml up -d
 ```
 
 ---
 
 ## Configuration
 
-All settings are driven by environment variables. See `.env.example` for the full list.
+All configuration is driven by environment variables. Copy `.env.example` to `.env`:
+
+```bash
+cp .env.example .env
+```
+
+### Key Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `REDIS_MODE` | `standalone` | `standalone` / `sentinel` / `cluster` |
+| `SPRING_PROFILES_ACTIVE` | `standalone` | Redis mode: `standalone`, `sentinel`, `cluster` |
 | `REDIS_HOST` | `localhost` | Redis host (standalone mode) |
 | `REDIS_PORT` | `6379` | Redis port (standalone mode) |
 | `REDIS_PASSWORD` | _(empty)_ | Redis AUTH password |
 | `REDIS_SENTINEL_MASTER` | `mymaster` | Sentinel master name |
-| `REDIS_SENTINEL_NODES` | `localhost:26379` | Comma-separated sentinel nodes |
+| `REDIS_SENTINEL_NODES` | `localhost:26379,...` | Comma-separated sentinel nodes |
 | `REDIS_CLUSTER_NODES` | `localhost:7000,...` | Comma-separated cluster nodes |
-| `REDIS_POOL_MAX_ACTIVE` | `16` | Lettuce pool max connections |
-| `SERVER_PORT` | `8080` | HTTP server port |
-| `SPRING_PROFILES_ACTIVE` | `dev` | Active Spring profile |
+| `CACHE_NAMESPACE` | `cache-service` | Key prefix (prevents collisions) |
+| `CACHE_DEFAULT_TTL` | `3600` | Default TTL in seconds |
+| `CACHE_MAX_KEY_LENGTH` | `512` | Max key length in characters |
+| `CACHE_MAX_VALUE_SIZE` | `1048576` | Max value size in bytes (1MB) |
+
+### Redis Modes
+
+#### Standalone (development)
+```bash
+SPRING_PROFILES_ACTIVE=standalone
+REDIS_HOST=localhost
+REDIS_PORT=6379
+```
+
+#### Sentinel (high-availability)
+```bash
+SPRING_PROFILES_ACTIVE=sentinel
+REDIS_SENTINEL_MASTER=mymaster
+REDIS_SENTINEL_NODES=sentinel1:26379,sentinel2:26379,sentinel3:26379
+```
+
+Requires: 1 Redis master + ≥1 replica + 3 sentinel processes.
+
+#### Cluster (horizontal scaling)
+```bash
+SPRING_PROFILES_ACTIVE=cluster
+REDIS_CLUSTER_NODES=node1:7000,node2:7001,node3:7002,node4:7003,node5:7004,node6:7005
+```
+
+Requires: ≥3 master nodes (6 nodes recommended: 3 masters + 3 replicas).
+
+> **Cluster compatibility:** `KEYS` is disabled. The service uses `SCAN` everywhere for non-blocking, cluster-safe key enumeration.
 
 ---
 
-## Health & Observability
+## API Reference
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /actuator/health` | Health status including Redis connectivity |
-| `GET /actuator/metrics` | All Micrometer metrics |
-| `GET /actuator/prometheus` | Prometheus-format metrics scrape endpoint |
-| `GET /actuator/loggers` | View/change log levels at runtime |
+Swagger UI: `http://localhost:8080/swagger-ui.html`
+OpenAPI spec: `http://localhost:8080/v3/api-docs`
 
-### Prometheus Scrape Config
+### Cache Endpoints (`/api/v1/cache`)
 
-```yaml
-scrape_configs:
-  - job_name: cache-service
-    metrics_path: /actuator/prometheus
-    static_configs:
-      - targets: ['cache-service:8080']
+#### Get a value
+```http
+GET /api/v1/cache/{key}
+```
+**Response 200:**
+```json
+{
+  "key": "user:42",
+  "value": "{\"name\": \"Alice\"}",
+  "ttlSeconds": 3598,
+  "hasExpiry": true,
+  "retrievedAt": "2024-01-15T10:30:00Z"
+}
+```
+**Response 404:** Key not found
+
+---
+
+#### Set a value
+```http
+PUT /api/v1/cache/{key}
+Content-Type: application/json
+
+{
+  "value": "{\"name\": \"Alice\"}",
+  "ttlSeconds": 3600
+}
+```
+Use `ttlSeconds: 0` for no expiry (persistent key).
+
+---
+
+#### Delete a key
+```http
+DELETE /api/v1/cache/{key}
+```
+Returns **204** if deleted, **404** if not found.
+
+---
+
+#### Check existence
+```http
+GET /api/v1/cache/{key}/exists
+```
+Returns **200** if exists, **404** if not.
+
+---
+
+#### Get TTL
+```http
+GET /api/v1/cache/{key}/ttl
+```
+```json
+{ "ttlSeconds": 900 }
+```
+TTL values: `-1` = no expiry, `-2` = key not found.
+
+---
+
+#### Update TTL
+```http
+PATCH /api/v1/cache/{key}/ttl
+Content-Type: application/json
+
+{ "ttlSeconds": 7200 }
+```
+Use `ttlSeconds: 0` to make the key persistent.
+
+---
+
+#### Atomic Counter
+```http
+POST /api/v1/cache/{key}/increment?delta=1
+```
+```json
+{ "value": 42 }
 ```
 
 ---
 
-## Running Tests
+#### Scan keys by pattern
+```http
+GET /api/v1/cache?pattern=user:*
+```
+```json
+{
+  "pattern": "user:*",
+  "count": 3,
+  "keys": ["user:1", "user:2", "user:3"]
+}
+```
+
+---
+
+#### Delete keys by pattern
+```http
+DELETE /api/v1/cache?pattern=session:expired:*
+```
+```json
+{ "deleted": 42 }
+```
+
+---
+
+#### Bulk Get
+```http
+POST /api/v1/cache/bulk/get
+Content-Type: application/json
+
+{ "keys": ["user:1", "user:2", "user:3"] }
+```
+
+---
+
+#### Bulk Set
+```http
+POST /api/v1/cache/bulk/set
+Content-Type: application/json
+
+{
+  "entries": {
+    "user:1": "Alice",
+    "user:2": "Bob"
+  },
+  "ttlSeconds": 3600
+}
+```
+
+---
+
+#### Bulk Delete
+```http
+DELETE /api/v1/cache/bulk
+Content-Type: application/json
+
+{ "keys": ["session:a", "session:b"] }
+```
+
+---
+
+### Lock Endpoints (`/api/v1/locks`)
+
+#### Acquire a lock
+```http
+POST /api/v1/locks/{lockKey}/acquire
+Content-Type: application/json
+
+{
+  "waitTimeMs": 5000,
+  "leaseTimeMs": 30000
+}
+```
+**Response 200:** Lock acquired
+**Response 409:** Lock not available (timeout)
+
+---
+
+#### Release a lock
+```http
+DELETE /api/v1/locks/{lockKey}/release
+```
+
+---
+
+#### Check lock status
+```http
+GET /api/v1/locks/{lockKey}/status
+```
+```json
+{
+  "lockKey": "order:123",
+  "locked": true,
+  "heldByCurrentThread": false,
+  "holdCount": 0
+}
+```
+
+---
+
+## Docker
+
+### Build the image
+```bash
+docker build -t cache-service:1.0.0 .
+```
+
+### Run with Docker
+```bash
+docker run -d \
+  --name cache-service \
+  -p 8080:8080 \
+  -p 8081:8081 \
+  -e SPRING_PROFILES_ACTIVE=standalone \
+  -e REDIS_HOST=host.docker.internal \
+  -e REDIS_PORT=6379 \
+  cache-service:1.0.0
+```
+
+### Docker Compose Commands
+```bash
+# Start all services
+docker compose up -d
+
+# Start with Redis Commander UI
+docker compose --profile tools up -d
+
+# View logs
+docker compose logs -f cache-service
+
+# Stop all
+docker compose down
+
+# Stop and remove volumes
+docker compose down -v
+
+# Start Sentinel stack
+docker compose -f docker-compose-sentinel.yml up -d
+```
+
+---
+
+## Testing
+
+### Unit Tests (no Docker required)
+```bash
+mvn test
+```
+
+### Integration Tests (requires Docker)
+Integration tests use Testcontainers to spin up a real Redis instance automatically.
 
 ```bash
-# Unit tests only (fast, no Redis needed)
-./mvnw test
-
-# Integration tests (requires Docker for Testcontainers)
-./mvnw verify
-
-# All tests
-./mvnw verify -Psurefire
+mvn verify -P integration-test
 ```
+
+### Test Coverage
+```bash
+mvn test jacoco:report
+open target/site/jacoco/index.html
+```
+
+---
+
+## Observability
+
+### Health Check
+```bash
+curl http://localhost:8081/actuator/health
+```
+```json
+{
+  "status": "UP",
+  "components": {
+    "redis": {
+      "status": "UP",
+      "details": {
+        "ping": "PONG",
+        "version": "7.2.4",
+        "uptime_seconds": "3600",
+        "used_memory_human": "2.00M",
+        "connected_clients": "3"
+      }
+    }
+  }
+}
+```
+
+### Prometheus Metrics
+```bash
+curl http://localhost:8081/actuator/prometheus
+```
+
+Key metrics:
+- `cache.redis.operation_seconds` – Latency per operation type (get/set/delete/scan)
+- `cache.redis.operation.errors_total` – Error count by operation and error type
+- `cache.hits_total` – Cache hit count
+- `cache.misses_total` – Cache miss count
+- `jvm.*` – JVM metrics (heap, GC, threads)
+- `process.*` – Process metrics (CPU, memory)
+
+### Available Actuator Endpoints
+| Endpoint | URL |
+|----------|-----|
+| Health | `http://localhost:8081/actuator/health` |
+| Metrics | `http://localhost:8081/actuator/metrics` |
+| Prometheus | `http://localhost:8081/actuator/prometheus` |
+| Environment | `http://localhost:8081/actuator/env` |
+| Info | `http://localhost:8081/actuator/info` |
 
 ---
 
@@ -224,60 +459,58 @@ scrape_configs:
 ```
 cache-service/
 ├── src/
-│   ├── main/java/com/example/cacheservice/
-│   │   ├── CacheServiceApplication.java       # Entry point
-│   │   ├── config/
-│   │   │   ├── RedisConfig.java               # Lettuce connection factory
-│   │   │   ├── RedissonConfig.java            # Redisson client
-│   │   │   ├── RedisProperties.java           # Typed config properties
-│   │   │   └── OpenApiConfig.java             # Swagger config
-│   │   ├── controller/
-│   │   │   ├── CacheController.java           # Cache REST endpoints
-│   │   │   └── LockController.java            # Lock REST endpoints
-│   │   ├── service/
-│   │   │   ├── CacheService.java              # Cache interface
-│   │   │   ├── LockService.java               # Lock interface
-│   │   │   └── impl/
-│   │   │       ├── LettuceCacheServiceImpl.java   # Lettuce implementation
-│   │   │       └── RedissonLockServiceImpl.java   # Redisson implementation
-│   │   ├── dto/
-│   │   │   ├── request/                       # Request DTOs
-│   │   │   └── response/                      # Response DTOs (ApiResponse envelope)
-│   │   ├── exception/
-│   │   │   ├── CacheKeyNotFoundException.java
-│   │   │   ├── LockAcquisitionException.java
-│   │   │   └── GlobalExceptionHandler.java    # Centralised error handling
-│   │   └── health/
-│   │       └── RedisHealthIndicator.java      # Custom health check
-│   └── main/resources/
-│       ├── application.yml                    # Base config
-│       ├── application-dev.yml
-│       ├── application-staging.yml
-│       ├── application-prod.yml
-│       └── logback-spring.xml                 # Structured logging
-├── src/test/
-│   └── java/com/example/cacheservice/
-│       ├── controller/CacheControllerTest.java    # Web-layer unit tests
-│       ├── service/LettuceCacheServiceImplTest.java # Service unit tests
-│       └── integration/CacheIntegrationTest.java  # Testcontainers integration tests
+│   ├── main/
+│   │   ├── java/com/example/cacheservice/
+│   │   │   ├── CacheServiceApplication.java
+│   │   │   ├── api/                          # REST Layer
+│   │   │   │   ├── controller/
+│   │   │   │   │   ├── CacheController.java
+│   │   │   │   │   └── LockController.java
+│   │   │   │   ├── dto/                      # Request/Response DTOs
+│   │   │   │   └── exception/
+│   │   │   │       └── GlobalExceptionHandler.java
+│   │   │   ├── business/                     # Business Layer
+│   │   │   │   ├── model/
+│   │   │   │   │   └── CacheEntry.java
+│   │   │   │   └── service/
+│   │   │   │       ├── CacheService.java     # Interface
+│   │   │   │       ├── LockService.java      # Interface
+│   │   │   │       └── impl/
+│   │   │   │           ├── CacheServiceImpl.java
+│   │   │   │           └── LockServiceImpl.java
+│   │   │   └── infrastructure/               # Data Access Layer
+│   │   │       ├── config/
+│   │   │       │   ├── RedisProperties.java  # @ConfigurationProperties
+│   │   │       │   ├── LettuceConfig.java    # Lettuce connection factory
+│   │   │       │   ├── RedissonConfig.java   # Redisson client
+│   │   │       │   └── SwaggerConfig.java
+│   │   │       ├── health/
+│   │   │       │   └── RedisHealthIndicator.java
+│   │   │       └── repository/
+│   │   │           ├── CacheRepository.java  # Interface (port)
+│   │   │           └── impl/
+│   │   │               └── LettuceCacheRepository.java
+│   │   └── resources/
+│   │       ├── application.yml               # Base config
+│   │       ├── application-standalone.yml    # Standalone Redis
+│   │       ├── application-sentinel.yml      # Redis Sentinel
+│   │       ├── application-cluster.yml       # Redis Cluster
+│   │       └── logback-spring.xml            # Structured logging
+│   └── test/
+│       ├── java/com/example/cacheservice/
+│       │   ├── api/controller/CacheControllerTest.java  (unit)
+│       │   ├── business/service/CacheServiceImplTest.java (unit)
+│       │   └── infrastructure/repository/
+│       │       └── LettuceCacheRepositoryIntegrationTest.java (integration)
+│       └── resources/application-test.yml
 ├── docker/
-│   └── sentinel.conf                          # Sentinel config for Docker Compose
-├── Dockerfile                                 # Multi-stage Docker build
-├── docker-compose.yml                         # Local dev (standalone + sentinel profiles)
-├── .env.example                               # Environment variable reference
-└── pom.xml
+│   └── redis/
+│       ├── standalone.conf
+│       └── sentinel.conf
+├── Dockerfile                                # Multi-stage build
+├── docker-compose.yml                        # Standalone stack
+├── docker-compose-sentinel.yml               # Sentinel HA stack
+├── pom.xml
+├── .env.example
+└── README.md
 ```
-
----
-
-## Design Decisions
-
-1. **Lettuce + Redisson coexistence**: Lettuce (the Spring Data Redis default) handles all cache CRUD operations; Redisson is wired alongside it exclusively for distributed locking. Both clients are configured with matching topology settings to point at the same Redis deployment.
-
-2. **`SCAN` over `KEYS`**: All pattern-based key enumeration uses the non-blocking `SCAN` cursor internally to avoid stalling the Redis event loop under large keyspaces.
-
-3. **Pipeline for bulk TTL writes**: `msetWithTtl` pipelines `SET + EXPIRE` commands in a single connection round-trip instead of issuing one request per key.
-
-4. **Redisson watch-dog**: Redisson's RLock automatically extends lease times for long-running operations, preventing premature lock expiry without requiring callers to manually renew.
-
-5. **`ApiResponse<T>` envelope**: Every API response is wrapped in a consistent envelope with `success`, `message`, `data`, `error_code`, and `timestamp` fields, making client-side error handling uniform.

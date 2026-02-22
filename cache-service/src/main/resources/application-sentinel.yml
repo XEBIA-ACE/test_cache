@@ -1,0 +1,13 @@
+# ================================================================
+# Redis Sentinel Mode
+# High-availability setup with automatic failover.
+# Requires: 1 master + N replicas + M sentinel instances (M >= 3)
+# ================================================================
+cache:
+  redis:
+    mode: sentinel
+    sentinel:
+      master: ${REDIS_SENTINEL_MASTER:mymaster}
+      # Comma-separated sentinel node addresses: host:port
+      nodes: ${REDIS_SENTINEL_NODES:localhost:26379,localhost:26380,localhost:26381}
+      password: ${REDIS_SENTINEL_PASSWORD:}

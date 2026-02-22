@@ -1,59 +1,79 @@
-##############################################################################
+# ================================================================
 # Multi-stage Dockerfile for Cache Service
-#
-# Stage 1 (builder): compiles the Maven project and produces the fat JAR.
-# Stage 2 (runtime): minimal JRE image that only ships the runnable artifact.
-#
-# Build:  docker build -t cache-service:latest .
-# Run:    docker run -p 8080:8080 --env-file .env cache-service:latest
-##############################################################################
+# Stage 1: Build with Maven
+# Stage 2: Extract layered JAR for optimal layer caching
+# Stage 3: Minimal JRE runtime image
+# ================================================================
 
-# ─── Stage 1: Build ──────────────────────────────────────────────────────────
+# ----------------------------------------------------------------
+# Stage 1: Build
+# ----------------------------------------------------------------
 FROM eclipse-temurin:17-jdk-alpine AS builder
 
 WORKDIR /build
 
-# Copy dependency manifests first to leverage Docker layer cache.
-# Dependencies are only re-downloaded when pom.xml changes.
+# Copy Maven wrapper and POM first (for dependency caching)
+COPY mvnw .
+COPY .mvn .mvn
 COPY pom.xml .
-COPY .mvn/ .mvn/
 
-# Download dependencies in a dedicated layer (offline-friendly in CI)
-RUN --mount=type=cache,target=/root/.m2 \
-    mvn dependency:go-offline -B -q
+# Download dependencies (cached unless pom.xml changes)
+RUN chmod +x ./mvnw && ./mvnw dependency:go-offline -B -q
 
-# Copy source and build, skipping integration tests for the image build
-COPY src/ src/
-RUN --mount=type=cache,target=/root/.m2 \
-    mvn package -B -q -DskipTests \
-    && mv target/cache-service-*.jar target/app.jar
+# Copy source and build (skip integration tests in Docker build)
+COPY src src
+RUN ./mvnw package -B -q -DskipTests
 
-# ─── Stage 2: Runtime ────────────────────────────────────────────────────────
+# ----------------------------------------------------------------
+# Stage 2: Extract layered JAR
+# Layered JARs enable fine-grained Docker layer caching:
+# - dependencies (rarely change)
+# - spring-boot-loader (rarely changes)
+# - snapshot-dependencies (occasionally change)
+# - application (changes every build)
+# ----------------------------------------------------------------
+FROM eclipse-temurin:17-jdk-alpine AS extractor
+
+WORKDIR /extract
+COPY --from=builder /build/target/*.jar app.jar
+RUN java -Djarmode=layertools -jar app.jar extract
+
+# ----------------------------------------------------------------
+# Stage 3: Runtime
+# ----------------------------------------------------------------
 FROM eclipse-temurin:17-jre-alpine AS runtime
 
-# Security: run as a non-root user
+# Security: run as non-root user
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
 WORKDIR /app
 
-# Copy only the fat JAR from the builder stage
-COPY --from=builder /build/target/app.jar app.jar
+# Copy layered JAR contents (most-stable layers first for cache efficiency)
+COPY --from=extractor /extract/dependencies/ ./
+COPY --from=extractor /extract/spring-boot-loader/ ./
+COPY --from=extractor /extract/snapshot-dependencies/ ./
+COPY --from=extractor /extract/application/ ./
 
-# Create log directory and set permissions
-RUN mkdir -p logs && chown -R appuser:appgroup /app
+# Create directory for logs
+RUN mkdir -p /app/logs && chown -R appuser:appgroup /app/logs
 
 USER appuser
 
-# Expose HTTP port (matches server.port default)
+# Application port
 EXPOSE 8080
+# Management/Actuator port
+EXPOSE 8081
 
-# JVM tuning:
-#   -XX:+UseContainerSupport   – respect cgroup memory limits (default in JDK 11+)
-#   -XX:MaxRAMPercentage=75    – use up to 75% of container RAM for the heap
-#   -XX:+UseG1GC               – low-pause garbage collector
-ENTRYPOINT ["java", \
-  "-XX:+UseContainerSupport", \
-  "-XX:MaxRAMPercentage=75.0", \
-  "-XX:+UseG1GC", \
-  "-Djava.security.egd=file:/dev/./urandom", \
-  "-jar", "app.jar"]
+# Health check using Spring Boot Actuator
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD wget -qO- http://localhost:8081/actuator/health | grep -q '"status":"UP"' || exit 1
+
+# JVM tuning for containerized environments
+ENV JAVA_OPTS="-XX:+UseContainerSupport \
+               -XX:MaxRAMPercentage=75.0 \
+               -XX:+UseG1GC \
+               -XX:+OptimizeStringConcat \
+               -Djava.security.egd=file:/dev/./urandom \
+               -Dspring.backgroundpreinitializer.ignore=true"
+
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS org.springframework.boot.loader.launch.JarLauncher"]
